@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --vigil-bg-content: #ffffff;
+    --vigil-bg-card: #f8fafc;
+    --vigil-text-base: #0f172a;
+    --vigil-border: #e2e8f0;
+  }
+
+  .dark {
+    --vigil-bg-content: #0f172a;
+    --vigil-bg-card: #1e293b;
+    --vigil-text-base: #e2e8f0;
+    --vigil-border: #1e293b;
+  }
+
+  * {
+    @apply transition-colors duration-300;
+  }
+  
+  body {
+    @apply bg-[var(--vigil-bg-content)] text-[var(--vigil-text-base)] font-sans tracking-tight transition-colors duration-300;
+  }
+}
+
+/* Base resets avoiding arbitrary unmapped tags internally if overriding */
+#root {
+  display: flex;
+  min-height: 100vh;
+}

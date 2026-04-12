@@ -1,0 +1,554 @@
+# ============================================================
+# VIGIL — Docker Compose (Local Development)
+# Start everything: docker compose up -d
+# ============================================================
+
+name: vigil
+
+services:
+  # ============================================================
+  # INFRASTRUCTURE
+  # ============================================================
+
+  # --- Zookeeper (Kafka dependency) ---
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    hostname: zookeeper
+    container_name: vigil-zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-logs:/var/lib/zookeeper/log
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo ruok | nc localhost 2181 | grep imok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # --- Kafka ---
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    hostname: kafka
+    container_name: vigil-kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 168
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # --- Schema Registry ---
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.6.0
+    hostname: schema-registry
+    container_name: vigil-schema-registry
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8085:8085"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:29092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8085
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8085/subjects"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # --- Kafka UI ---
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    hostname: kafka-ui
+    container_name: vigil-kafka-ui
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    ports:
+      - "8082:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: vigil-local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:8085
+      DYNAMIC_CONFIG_ENABLED: "true"
+    restart: unless-stopped
+
+  # --- Apache Flink JobManager ---
+  flink-jobmanager:
+    image: flink:1.18
+    hostname: flink-jobmanager
+    container_name: vigil-flink-jobmanager
+    ports:
+      - "8081:8081"
+    command: jobmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        state.backend: rocksdb
+        state.checkpoints.dir: file:///opt/flink/checkpoints
+        state.savepoints.dir: file:///opt/flink/savepoints
+    volumes:
+      - flink-checkpoints:/opt/flink/checkpoints
+      - flink-savepoints:/opt/flink/savepoints
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/overview"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # --- Apache Flink TaskManager ---
+  flink-taskmanager:
+    image: flink:1.18
+    hostname: flink-taskmanager
+    container_name: vigil-flink-taskmanager
+    depends_on:
+      flink-jobmanager:
+        condition: service_healthy
+    command: taskmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 4
+        state.backend: rocksdb
+    volumes:
+      - flink-checkpoints:/opt/flink/checkpoints
+    restart: unless-stopped
+
+  # --- ClickHouse ---
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.1
+    hostname: clickhouse
+    container_name: vigil-clickhouse
+    ports:
+      - "8123:8123"
+      - "9009:9000"
+    environment:
+      CLICKHOUSE_DB: vigil
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - clickhouse-logs:/var/log/clickhouse-server
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    restart: unless-stopped
+
+  # --- Redis ---
+  redis:
+    image: redis:7.2-alpine
+    hostname: redis
+    container_name: vigil-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # --- PostgreSQL ---
+  postgres:
+    image: postgres:16-alpine
+    hostname: postgres
+    container_name: vigil-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: vigil
+      POSTGRES_USER: vigil
+      POSTGRES_PASSWORD: changeme_postgres
+      POSTGRES_MULTIPLE_DATABASES: vigil,mlflow
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/init-multiple-dbs.sh:/docker-entrypoint-initdb.d/init-multiple-dbs.sh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vigil -d vigil"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # --- MLflow ---
+  mlflow:
+    image: python:3.12-slim
+    hostname: mlflow
+    container_name: vigil-mlflow
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "5000:5000"
+    environment:
+      MLFLOW_BACKEND_STORE_URI: postgresql://vigil:changeme_postgres@postgres:5432/mlflow
+      MLFLOW_DEFAULT_ARTIFACT_ROOT: /mlflow/artifacts
+    command: >
+      sh -c "pip install mlflow==2.10.2 psycopg2-binary &&
+      mlflow server --host 0.0.0.0 --port 5000
+      --backend-store-uri postgresql://vigil:vigil@postgres:5432/mlflow
+      --default-artifact-root /mlflow/artifacts"
+    volumes:
+      - mlflow-artifacts:/mlflow/artifacts
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # ============================================================
+  # APPLICATION SERVICES
+  # ============================================================
+
+  # --- 1. SDK Gateway (HTTP :8000) ---
+  sdk-gateway:
+    build:
+      context: ./services/sdk-gateway
+      dockerfile: Dockerfile
+    hostname: sdk-gateway
+    container_name: vigil-sdk-gateway
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      VIGIL_ENV: development
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      USER_CONTEXT_GRPC_HOST: user-context
+      USER_CONTEXT_GRPC_PORT: 50050
+      FRICTION_CLASSIFIER_GRPC_HOST: friction-classifier
+      FRICTION_CLASSIFIER_GRPC_PORT: 50051
+      INTERVENTION_ENGINE_GRPC_HOST: intervention-engine
+      INTERVENTION_ENGINE_GRPC_PORT: 50052
+    restart: unless-stopped
+
+  # --- 2. Event Ingestion (HTTP :8002) ---
+  event-ingestion:
+    build:
+      context: ./services/event-ingestion
+      dockerfile: Dockerfile
+    hostname: event-ingestion
+    container_name: vigil-event-ingestion
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    ports:
+      - "8002:8002"
+    environment:
+      VIGIL_ENV: development
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_SCHEMA_REGISTRY_URL: http://schema-registry:8085
+    restart: unless-stopped
+
+  # --- 3. User Context (HTTP :8003, gRPC :50050) ---
+  user-context:
+    build:
+      context: ./services/user-context
+      dockerfile: Dockerfile
+    hostname: user-context
+    container_name: vigil-user-context
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8003:8003"
+      - "50050:50050"
+    environment:
+      VIGIL_ENV: development
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    restart: unless-stopped
+
+  # --- 4. Friction Classifier (HTTP :8004, gRPC :50051) ---
+  friction-classifier:
+    build:
+      context: ./services/friction-classifier
+      dockerfile: Dockerfile
+    hostname: friction-classifier
+    container_name: vigil-friction-classifier
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8004:8004"
+      - "50051:50051"
+    environment:
+      VIGIL_ENV: development
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    restart: unless-stopped
+
+  # --- 5. Intervention Engine (HTTP :8005, gRPC :50052) ---
+  intervention-engine:
+    build:
+      context: ./services/intervention-engine
+      dockerfile: Dockerfile
+    hostname: intervention-engine
+    container_name: vigil-intervention-engine
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8005:8005"
+      - "50052:50052"
+    environment:
+      VIGIL_ENV: development
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    restart: unless-stopped
+
+  # --- 6. Intervention Delivery (HTTP :8006) ---
+  intervention-delivery:
+    build:
+      context: ./services/intervention-delivery
+      dockerfile: Dockerfile
+    hostname: intervention-delivery
+    container_name: vigil-intervention-delivery
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8006:8006"
+    environment:
+      VIGIL_ENV: development
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    restart: unless-stopped
+
+  # --- 7. Outcome Tracker (HTTP :8007) ---
+  outcome-tracker:
+    build:
+      context: ./services/outcome-tracker
+      dockerfile: Dockerfile
+    hostname: outcome-tracker
+    container_name: vigil-outcome-tracker
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8007:8007"
+    environment:
+      VIGIL_ENV: development
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: vigil
+      POSTGRES_USER: vigil
+      POSTGRES_PASSWORD: changeme_postgres
+    restart: unless-stopped
+
+  # --- 8. Company Intelligence (HTTP :8080) ---
+  company-intel:
+    build:
+      context: ./services/company-intel
+      dockerfile: Dockerfile
+    hostname: company-intel
+    container_name: vigil-company-intel
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      VIGIL_ENV: development
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_DB: vigil
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    restart: unless-stopped
+
+  # --- 9. Tenant Management (HTTP :8001) ---
+  tenant-management:
+    build:
+      context: ./services/tenant-management
+      dockerfile: Dockerfile
+    hostname: tenant-management
+    container_name: vigil-tenant-management
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8001:8001"
+    environment:
+      VIGIL_ENV: development
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: vigil
+      POSTGRES_USER: vigil
+      POSTGRES_PASSWORD: changeme_postgres
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    restart: unless-stopped
+
+  # --- 10. Notification Service (HTTP :8008) ---
+  notification-service:
+    build:
+      context: ./services/notification-service
+      dockerfile: Dockerfile
+    hostname: notification-service
+    container_name: vigil-notification-service
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8008:8008"
+    environment:
+      VIGIL_ENV: development
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    restart: unless-stopped
+
+  # --- 11. Model Registry (HTTP :5001) ---
+  model-registry:
+    build:
+      context: ./services/model-registry
+      dockerfile: Dockerfile
+    hostname: model-registry
+    container_name: vigil-model-registry
+    depends_on:
+      mlflow:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    ports:
+      - "5001:5001"
+    environment:
+      VIGIL_ENV: development
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    restart: unless-stopped
+
+  # --- 12. Stream Processor (HTTP :8009) ---
+  stream-processor:
+    build:
+      context: ./services/stream-processor
+      dockerfile: Dockerfile
+    hostname: stream-processor
+    container_name: vigil-stream-processor
+    depends_on:
+      kafka:
+        condition: service_healthy
+      flink-jobmanager:
+        condition: service_healthy
+    ports:
+      - "8009:8009"
+    environment:
+      VIGIL_ENV: development
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      FLINK_JOBMANAGER_HOST: flink-jobmanager
+      FLINK_JOBMANAGER_PORT: 8081
+    restart: unless-stopped
+
+  # --- 13. Admin Panel (HTTP :9000) ---
+  admin-panel:
+    build:
+      context: ./services/admin-panel
+      dockerfile: Dockerfile
+    hostname: admin-panel
+    container_name: vigil-admin-panel
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    ports:
+      - "9000:9000"
+    environment:
+      VIGIL_ENV: development
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: vigil
+      POSTGRES_USER: vigil
+      POSTGRES_PASSWORD: changeme_postgres
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_DB: vigil
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    restart: unless-stopped
+
+# ============================================================
+# VOLUMES
+# ============================================================
+volumes:
+  zookeeper-data:
+  zookeeper-logs:
+  kafka-data:
+  postgres-data:
+  redis-data:
+  clickhouse-data:
+  clickhouse-logs:
+  mlflow-artifacts:
+  flink-checkpoints:
+  flink-savepoints:

@@ -1,0 +1,422 @@
+syntax = "proto3";
+
+package vigil;
+
+option java_multiple_files = true;
+option java_package = "dev.vigil.proto";
+option go_package = "github.com/vigil/proto";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+// ============================================================
+// SHARED MESSAGE TYPES
+// ============================================================
+
+// Friction event emitted by the SDK
+message FrictionEvent {
+  string event_id = 1;
+  string tenant_id = 2;
+  string user_id = 3;
+  string session_id = 4;
+  string event_type = 5;            // e.g. "ad_impression_paid_tier", "delivery_late_no_update"
+  string industry = 6;              // e.g. "streaming", "food_delivery", "banking", "saas"
+  google.protobuf.Timestamp timestamp = 7;
+  google.protobuf.Struct payload = 8;  // arbitrary event-specific data
+  string schema_version = 9;        // e.g. "1.0.0"
+  string sdk_version = 10;
+  string platform = 11;             // "ios", "android", "web"
+  string app_version = 12;
+}
+
+// Rolling user context (last 30 events + computed features)
+message UserContextData {
+  string tenant_id = 1;
+  string user_id = 2;
+  int32 event_count_30d = 3;
+  double avg_value_gap_score = 4;
+  int32 friction_event_count_7d = 5;
+  int32 intervention_count_7d = 6;
+  double intervention_success_rate = 7;
+  string subscription_tier = 8;       // "free", "basic", "premium"
+  int32 days_since_signup = 9;
+  google.protobuf.Timestamp last_active = 10;
+  repeated FrictionEvent recent_events = 11;  // last 30 events rolling window
+  map<string, double> feature_vector = 12;    // precomputed ML features
+  string churn_risk_segment = 13;      // "low", "medium", "high", "critical"
+}
+
+// Friction classification result
+message FrictionScore {
+  string event_id = 1;
+  string tenant_id = 2;
+  string user_id = 3;
+  double value_gap_score = 4;          // 0–10, lower = more friction
+  string severity = 5;                 // "low", "medium", "warning", "critical"
+  double churn_probability = 6;        // 0.0–1.0
+  string friction_category = 7;        // e.g. "monetization", "quality", "support"
+  double confidence = 8;               // model confidence 0.0–1.0
+  string model_version = 9;
+  google.protobuf.Timestamp classified_at = 10;
+  map<string, double> feature_importance = 11;  // SHAP-like attribution
+}
+
+// Intervention definition
+message Intervention {
+  string intervention_id = 1;
+  string tenant_id = 2;
+  string user_id = 3;
+  string intervention_type = 4;       // "message", "discount", "feature_unlock", "support_escalation"
+  string channel = 5;                 // "in_app", "push", "email", "sms"
+  string content = 6;                 // rendered message content
+  string template_id = 7;
+  map<string, string> parameters = 8;  // template variables
+  double expected_reward = 9;          // bandit predicted reward
+  string policy_version = 10;
+  int32 priority = 11;                 // 1=highest
+  int64 ttl_seconds = 12;             // time-to-live for delivery
+  google.protobuf.Timestamp created_at = 13;
+  string holdout_group = 14;           // "control" or "treatment"
+}
+
+// Outcome of an intervention
+message Outcome {
+  string outcome_id = 1;
+  string intervention_id = 2;
+  string tenant_id = 3;
+  string user_id = 4;
+  string outcome_type = 5;            // "delivered", "seen", "clicked", "converted", "dismissed", "expired"
+  double reward = 6;                  // computed reward signal for bandit
+  google.protobuf.Timestamp occurred_at = 7;
+  map<string, string> metadata = 8;
+}
+
+// Tenant information
+message TenantInfo {
+  string tenant_id = 1;
+  string company_name = 2;
+  string industry = 3;
+  string plan = 4;                    // "starter", "growth", "enterprise"
+  bool active = 5;
+  google.protobuf.Timestamp created_at = 6;
+  repeated string sdk_keys = 7;
+  map<string, string> settings = 8;
+}
+
+// Model metadata
+message ModelInfo {
+  string model_id = 1;
+  string model_name = 2;
+  string model_type = 3;             // "friction_classifier", "intervention_bandit"
+  string version = 4;
+  string stage = 5;                   // "staging", "champion", "challenger", "archived"
+  string artifact_uri = 6;
+  map<string, double> metrics = 7;
+  google.protobuf.Timestamp created_at = 8;
+  string created_by = 9;
+}
+
+// ============================================================
+// SERVICE: SDK Gateway
+// Receives events from client SDKs, authenticates, produces to Kafka
+// ============================================================
+
+service SDKGatewayService {
+  // Ingest a single friction event from the SDK
+  rpc IngestEvent(IngestEventRequest) returns (IngestEventResponse);
+
+  // Stream events from a session (server-side streaming)
+  rpc StreamEvents(StreamEventsRequest) returns (stream FrictionEvent);
+}
+
+message IngestEventRequest {
+  FrictionEvent event = 1;
+  string sdk_key = 2;                // API key for tenant auth
+}
+
+message IngestEventResponse {
+  bool accepted = 1;
+  string event_id = 2;
+  Intervention intervention = 3;     // immediate intervention if applicable
+  double processing_time_ms = 4;
+}
+
+message StreamEventsRequest {
+  string tenant_id = 1;
+  string session_id = 2;
+  string sdk_key = 3;
+}
+
+// ============================================================
+// SERVICE: User Context
+// Maintains rolling 30-event window per user in Redis
+// ============================================================
+
+service UserContextService {
+  // Get the current context (rolling state) for a user
+  rpc GetUserContext(GetUserContextRequest) returns (GetUserContextResponse);
+
+  // Update user context with a new event
+  rpc UpdateUserContext(UpdateUserContextRequest) returns (UpdateUserContextResponse);
+}
+
+message GetUserContextRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+}
+
+message GetUserContextResponse {
+  UserContextData context = 1;
+  bool found = 2;
+  double lookup_time_ms = 3;        // must be <5ms
+}
+
+message UpdateUserContextRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+  FrictionEvent event = 3;
+}
+
+message UpdateUserContextResponse {
+  bool success = 1;
+  UserContextData updated_context = 2;
+}
+
+// ============================================================
+// SERVICE: Friction Classifier
+// River online ML model — classifies events in real-time
+// ============================================================
+
+service FrictionClassifierService {
+  // Classify a single event and return friction score
+  rpc ClassifyEvent(ClassifyEventRequest) returns (ClassifyEventResponse);
+
+  // Batch classify (for backfill / replay)
+  rpc BatchClassify(BatchClassifyRequest) returns (BatchClassifyResponse);
+}
+
+message ClassifyEventRequest {
+  FrictionEvent event = 1;
+  UserContextData user_context = 2;
+}
+
+message ClassifyEventResponse {
+  FrictionScore score = 1;
+  bool requires_intervention = 2;    // true if score crosses threshold
+  double classification_time_ms = 3; // must be <15ms
+}
+
+message BatchClassifyRequest {
+  repeated ClassifyEventRequest events = 1;
+}
+
+message BatchClassifyResponse {
+  repeated ClassifyEventResponse results = 1;
+  double total_time_ms = 2;
+}
+
+// ============================================================
+// SERVICE: Intervention Engine
+// Vowpal Wabbit contextual bandit — selects best intervention
+// ============================================================
+
+service InterventionEngineService {
+  // Select the best intervention for a friction event
+  rpc SelectIntervention(SelectInterventionRequest) returns (SelectInterventionResponse);
+
+  // Record an intervention outcome (reward signal for bandit)
+  rpc RecordOutcome(RecordOutcomeRequest) returns (RecordOutcomeResponse);
+}
+
+message SelectInterventionRequest {
+  FrictionEvent event = 1;
+  FrictionScore score = 2;
+  UserContextData user_context = 3;
+  string tenant_id = 4;
+}
+
+message SelectInterventionResponse {
+  Intervention intervention = 1;
+  bool should_intervene = 2;         // false if control group or not worth it
+  double selection_time_ms = 3;      // must be <20ms
+}
+
+message RecordOutcomeRequest {
+  Outcome outcome = 1;
+}
+
+message RecordOutcomeResponse {
+  bool success = 1;
+  double updated_reward = 2;
+}
+
+// ============================================================
+// SERVICE: Outcome Tracker
+// Tracks intervention outcomes for A/B testing and reward computation
+// ============================================================
+
+service OutcomeTrackerService {
+  // Record an outcome event
+  rpc RecordOutcome(RecordOutcomeTrackerRequest) returns (RecordOutcomeTrackerResponse);
+
+  // Get stats for an intervention
+  rpc GetInterventionStats(GetInterventionStatsRequest) returns (GetInterventionStatsResponse);
+}
+
+message RecordOutcomeTrackerRequest {
+  Outcome outcome = 1;
+}
+
+message RecordOutcomeTrackerResponse {
+  bool success = 1;
+}
+
+message GetInterventionStatsRequest {
+  string tenant_id = 1;
+  string intervention_id = 2;
+}
+
+message GetInterventionStatsResponse {
+  string intervention_id = 1;
+  int64 total_delivered = 2;
+  int64 total_seen = 3;
+  int64 total_clicked = 4;
+  int64 total_converted = 5;
+  int64 total_dismissed = 6;
+  double avg_reward = 7;
+  double conversion_rate = 8;
+}
+
+// ============================================================
+// SERVICE: Tenant Management
+// CRUD for tenants, SDK key generation, billing
+// ============================================================
+
+service TenantManagementService {
+  // Create a new tenant
+  rpc CreateTenant(CreateTenantRequest) returns (CreateTenantResponse);
+
+  // Get tenant info
+  rpc GetTenant(GetTenantRequest) returns (GetTenantResponse);
+
+  // Validate an SDK key and return tenant info
+  rpc ValidateSDKKey(ValidateSDKKeyRequest) returns (ValidateSDKKeyResponse);
+
+  // List all tenants (admin only)
+  rpc ListTenants(ListTenantsRequest) returns (ListTenantsResponse);
+
+  // Generate a new SDK key for a tenant
+  rpc GenerateSDKKey(GenerateSDKKeyRequest) returns (GenerateSDKKeyResponse);
+}
+
+message CreateTenantRequest {
+  string company_name = 1;
+  string industry = 2;
+  string plan = 3;
+  map<string, string> settings = 4;
+}
+
+message CreateTenantResponse {
+  TenantInfo tenant = 1;
+  string sdk_key = 2;                // initial SDK key
+}
+
+message GetTenantRequest {
+  string tenant_id = 1;
+}
+
+message GetTenantResponse {
+  TenantInfo tenant = 1;
+  bool found = 2;
+}
+
+message ValidateSDKKeyRequest {
+  string sdk_key = 1;
+}
+
+message ValidateSDKKeyResponse {
+  bool valid = 1;
+  TenantInfo tenant = 2;
+}
+
+message ListTenantsRequest {
+  int32 page = 1;
+  int32 page_size = 2;
+  string industry_filter = 3;
+}
+
+message ListTenantsResponse {
+  repeated TenantInfo tenants = 1;
+  int32 total_count = 2;
+}
+
+message GenerateSDKKeyRequest {
+  string tenant_id = 1;
+  string key_name = 2;               // human-readable label
+}
+
+message GenerateSDKKeyResponse {
+  string sdk_key = 1;
+  string key_name = 2;
+}
+
+// ============================================================
+// SERVICE: Model Registry
+// Wraps MLflow for model versioning, A/B deployment
+// ============================================================
+
+service ModelRegistryService {
+  // Get the currently active model for a given type
+  rpc GetActiveModel(GetActiveModelRequest) returns (GetActiveModelResponse);
+
+  // Deploy a model version to production
+  rpc DeployModel(DeployModelRequest) returns (DeployModelResponse);
+
+  // Rollback to a previous model version
+  rpc RollbackModel(RollbackModelRequest) returns (RollbackModelResponse);
+
+  // List all model versions
+  rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
+}
+
+message GetActiveModelRequest {
+  string model_type = 1;             // "friction_classifier" or "intervention_bandit"
+  string tenant_id = 2;              // optional — for tenant-specific models
+}
+
+message GetActiveModelResponse {
+  ModelInfo model = 1;
+  bool found = 2;
+}
+
+message DeployModelRequest {
+  string model_id = 1;
+  string stage = 2;                  // "champion" or "challenger"
+  double traffic_percentage = 3;     // for A/B: 0.0–1.0
+}
+
+message DeployModelResponse {
+  bool success = 1;
+  ModelInfo deployed_model = 2;
+}
+
+message RollbackModelRequest {
+  string model_type = 1;
+  string target_version = 2;        // version to rollback to
+}
+
+message RollbackModelResponse {
+  bool success = 1;
+  ModelInfo active_model = 2;
+}
+
+message ListModelsRequest {
+  string model_type = 1;
+  int32 page = 2;
+  int32 page_size = 3;
+}
+
+message ListModelsResponse {
+  repeated ModelInfo models = 1;
+  int32 total_count = 2;
+}

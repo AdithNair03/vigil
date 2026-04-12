@@ -1,0 +1,24 @@
+{
+  "name": "vigil",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Universal Real-Time Friction Intelligence Platform",
+  "author": "Adith Nair",
+  "license": "UNLICENSED",
+  "workspaces": [
+    "frontend/*"
+  ],
+  "scripts": {
+    "lint": "nx run-many --target=lint --all",
+    "test": "nx run-many --target=test --all",
+    "build": "nx run-many --target=build --all",
+    "dev": "docker compose up -d",
+    "dev:down": "docker compose down",
+    "dev:logs": "docker compose logs -f",
+    "proto:generate": "bash scripts/generate_protos.sh"
+  },
+  "devDependencies": {
+    "nx": "^19.0.0",
+    "@nx/workspace": "^19.0.0"
+  }
+}

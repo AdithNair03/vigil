@@ -1,0 +1,26 @@
+{
+  "$schema": "./node_modules/nx/schemas/nx-schema.json",
+  "namedInputs": {
+    "default": ["{projectRoot}/**/*", "sharedGlobals"],
+    "sharedGlobals": ["proto/**/*", "pyproject.toml"],
+    "production": ["default", "!{projectRoot}/tests/**/*"]
+  },
+  "targetDefaults": {
+    "lint": {
+      "inputs": ["default"],
+      "cache": true
+    },
+    "test": {
+      "inputs": ["default"],
+      "cache": true,
+      "dependsOn": ["lint"]
+    },
+    "build": {
+      "inputs": ["production"],
+      "cache": true,
+      "dependsOn": ["test"]
+    }
+  },
+  "plugins": [],
+  "defaultBase": "main"
+}
