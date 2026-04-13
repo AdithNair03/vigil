@@ -3,7 +3,7 @@
  * Centralized configuration for all microservice endpoints
  */
 
-const SDK_GATEWAY_URL = 'http://localhost:8000';
+const SDK_GATEWAY_URL = 'https://vigil-sdk-gateway.onrender.com';
 const COMPANY_INTEL_URL = 'http://localhost:8181';
 const ADMIN_PANEL_URL = 'http://localhost:9000';
 const TENANT_MGMT_URL = 'http://localhost:8001';
@@ -28,13 +28,13 @@ async function handleResponse(response: Response) {
 export const api = {
   // SDK Gateway
   events: {
-    ingest: (data: any) => 
+    ingest: (data: any) =>
       fetch(`${SDK_GATEWAY_URL}/events`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
       }).then(handleResponse),
-    
+
     stream: () => new WebSocket(`${SDK_GATEWAY_URL.replace('http', 'ws')}/stream`),
   },
 
@@ -42,7 +42,7 @@ export const api = {
   analytics: {
     getDashboard: (tenantId: string) =>
       fetch(`${COMPANY_INTEL_URL}/api/v1/tenants/${tenantId}/dashboard`).then(handleResponse),
-    
+
     generateReport: (tenantId: string) =>
       fetch(`${COMPANY_INTEL_URL}/api/v1/tenants/${tenantId}/reports/generate`, {
         method: 'POST',
@@ -56,23 +56,23 @@ export const api = {
         method: 'POST',
         body: credentials,
       }).then(handleResponse),
-    
+
     getSystemHealth: (token: string) =>
       fetch(`${ADMIN_PANEL_URL}/system/health`, {
         headers: { 'Authorization': `Bearer ${token}` },
       }).then(handleResponse),
-    
+
     getTenants: (token: string) =>
       fetch(`${ADMIN_PANEL_URL}/admin/tenants`, {
         headers: { 'Authorization': `Bearer ${token}` },
       }).then(handleResponse),
-    
+
     sendTestEvent: (token: string, data: any) =>
       fetch(`${ADMIN_PANEL_URL}/admin/events/test`, {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}` 
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify(data),
       }).then(handleResponse),
@@ -92,9 +92,9 @@ export const api = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
       }).then(handleResponse),
-    
+
     getById: (id: string) =>
-       fetch(`${TENANT_MGMT_URL}/tenants/${id}`).then(handleResponse),
+      fetch(`${TENANT_MGMT_URL}/tenants/${id}`).then(handleResponse),
   },
 
   // User Context
