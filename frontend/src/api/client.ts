@@ -4,7 +4,7 @@
  */
 
 const SDK_GATEWAY_URL = 'https://vigil-sdk-gateway.onrender.com';
-const COMPANY_INTEL_URL = 'http://localhost:8181';
+const COMPANY_INTEL_URL = 'https://vigil-company-intel.onrender.com';
 const ADMIN_PANEL_URL = 'http://localhost:9000';
 const TENANT_MGMT_URL = 'http://localhost:8001';
 const USER_CONTEXT_URL = 'http://localhost:8003';
