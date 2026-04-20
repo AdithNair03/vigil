@@ -12,6 +12,7 @@ import AdminLogin from './pages/AdminLogin';
 import CustomerList from './pages/CustomerList';
 import Alerts from './pages/Alerts';
 import Settings from './pages/Settings';
+import ModelPerformance from './pages/ModelPerformance';
 import { ThemeProvider } from './context/ThemeContext';
 
 // Protected Route Wrapper for Admin
@@ -51,6 +52,14 @@ function App() {
             element={
               <ProtectedAdmin>
                 <Admin />
+              </ProtectedAdmin>
+            } 
+          />
+          <Route 
+            path="/model-performance" 
+            element={
+              <ProtectedAdmin>
+                <ModelPerformance />
               </ProtectedAdmin>
             } 
           />

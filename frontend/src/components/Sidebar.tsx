@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { Activity, BarChart3, Shield, Settings as SettingsIcon, FileTerminal, ChevronDown, Users, LogIn, UserPlus, Sun, Moon, Bell } from 'lucide-react';
+import { Activity, BarChart3, Shield, Settings as SettingsIcon, FileTerminal, ChevronDown, Users, LogIn, UserPlus, Sun, Moon, Bell, TrendingUp } from 'lucide-react';
 import { useTenant, DEMO_TENANTS } from '../lib/TenantContext';
 import { useTheme } from '../context/ThemeContext';
 
@@ -20,6 +20,7 @@ export default function Sidebar() {
     { to: '/customers', label: 'Customers', icon: Users },
     { to: '/alerts', label: 'Alerts', icon: Bell },
     { to: '/admin', label: 'Admin Panel', icon: Shield },
+    { to: '/model-performance', label: 'ML Metrics', icon: TrendingUp },
     { to: '/settings', label: 'Settings', icon: SettingsIcon },
     { to: '/docs', label: 'Integration', icon: FileTerminal },
   ];

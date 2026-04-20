@@ -1,0 +1,44 @@
+{
+    "accuracy": 0.636,
+    "precision": 0.6282,
+    "recall": 0.6375,
+    "f1_score": 0.6328,
+    "auc_roc": 0.7022,
+    "confusion_matrix": {
+        "CRITICAL": {
+            "CRITICAL": 158,
+            "WARNING": 559,
+            "LOW": 37
+        },
+        "WARNING": {
+            "CRITICAL": 145,
+            "WARNING": 531,
+            "LOW": 46
+        },
+        "LOW": {
+            "CRITICAL": 53,
+            "WARNING": 1186,
+            "LOW": 285
+        }
+    },
+    "feature_importance": {
+        "recency_score": 0.2059,
+        "frequency_score": 0.2563,
+        "session_depth": 0.3134,
+        "industry_severity": 0.3232,
+        "historical_signal": 0.3946
+    },
+    "per_industry_accuracy": {
+        "streaming": 0.6472,
+        "food": 0.6093,
+        "banking": 0.6237,
+        "saas": 0.665,
+        "telecom": 0.6352
+    },
+    "model_info": {
+        "algorithm": "River LogisticRegression",
+        "learning_type": "Online / Incremental",
+        "last_updated": "2026-04-19 19:26:38",
+        "total_events_processed": 10000
+    }
+}

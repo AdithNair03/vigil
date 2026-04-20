@@ -7,6 +7,7 @@ const SDK_GATEWAY_URL = 'https://vigil-sdk-gateway.onrender.com';
 const COMPANY_INTEL_URL = 'https://vigil-company-intel.onrender.com';
 const ADMIN_PANEL_URL = 'https://vigil-admin-panel.onrender.com';
 const TENANT_MGMT_URL = 'http://localhost:8001';
+const FRICTION_CLASSIFIER_URL = 'http://localhost:8002';
 const USER_CONTEXT_URL = 'http://localhost:8003';
 
 export interface APIError {
@@ -101,5 +102,11 @@ export const api = {
   userContext: {
     get: (userId: string) =>
       fetch(`${USER_CONTEXT_URL}/context/${userId}`).then(handleResponse),
+  },
+
+  // Friction Classifier Metrics
+  metrics: {
+    getEvaluation: () =>
+      fetch(`${FRICTION_CLASSIFIER_URL}/metrics/evaluation`).then(handleResponse),
   }
 };

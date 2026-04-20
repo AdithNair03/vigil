@@ -10,6 +10,7 @@ import {
 export default function Admin() {
   const [healthData, setHealthData] = useState<any>(null);
   const [tenants, setTenants] = useState<any[]>([]);
+  const [modelMetrics, setModelMetrics] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<APIError | null>(null);
   const [token] = useState<string | null>(localStorage.getItem('vigil_admin_token'));
@@ -26,12 +27,14 @@ export default function Admin() {
     if (!token) return;
     setLoading(true);
     try {
-      const [health, tenantList] = await Promise.all([
+      const [health, tenantList, metrics] = await Promise.all([
         api.admin.getSystemHealth(token),
-        api.admin.getTenants(token)
+        api.admin.getTenants(token),
+        api.metrics.getEvaluation().catch(() => null)
       ]);
       setHealthData(health);
       setTenants(tenantList);
+      setModelMetrics(metrics);
       setError(null);
     } catch (err: any) {
       setError(err);
@@ -250,11 +253,15 @@ export default function Admin() {
                     </div>
                     <div className="flex justify-between pb-4 border-b border-vigil-border transition-colors">
                         <span className="text-xs text-slate-400 dark:text-slate-500 font-bold uppercase">Last Training</span>
-                        <span className="text-sm font-bold text-vigil-base">4h ago</span>
+                        <span className="text-sm font-bold text-vigil-base">
+                            {modelMetrics?.model_info?.last_updated ? 'Today' : '4h ago'}
+                        </span>
                     </div>
                     <div className="flex justify-between items-center">
                         <span className="text-xs text-slate-400 dark:text-slate-500 font-bold uppercase">Core Accuracy</span>
-                        <span className="text-2xl font-black text-teal-600 dark:text-teal-400 font-mono">92.8%</span>
+                        <span className="text-2xl font-black text-teal-600 dark:text-teal-400 font-mono">
+                            {modelMetrics?.accuracy ? (modelMetrics.accuracy * 100).toFixed(1) + '%' : '92.8%'}
+                        </span>
                     </div>
                     
                     <button 

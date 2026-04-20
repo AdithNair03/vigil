@@ -68,6 +68,20 @@ async def manual_classify(req: ClassifyRequest):
     return ClassifyResponse(score=score, requires_intervention=needs_intervention)
 
 
+@app.get("/metrics/evaluation", tags=["System"])
+async def get_evaluation_metrics():
+    """Returns the generated model metrics from the last evaluation run."""
+    try:
+        import os
+        metrics_path = os.path.join(os.path.dirname(__file__), "model_metrics.json")
+        with open(metrics_path, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {"error": "Evaluation metrics not found. Run evaluate_model.py first."}
+    except Exception as e:
+        return {"error": f"Failed to load metrics: {str(e)}"}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=settings.http_port)
